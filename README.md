@@ -6,57 +6,110 @@ Formula 1 performance analytics dashboard for exploring race results, driver per
 
 This project provides a simple starting point for analyzing F1 data and presenting key insights through a dashboard-style interface. It is intended to support comparisons across drivers, constructors, and races.
 
+# F1 Performance Analytics
+
+Formula 1 performance analytics workspace for telemetry comparison, spatial track analysis, strategy simulation, and model-backed stint forecasting.
+
+## Overview
+
+The dashboard uses FastF1 when available, falls back to deterministic synthetic telemetry when offline, and exposes the same analytics through a FastAPI gateway. The current UI emphasizes synchronized telemetry inspection, derived physics metrics, and vector track overlays.
+
+## Architecture
+
+```mermaid
+flowchart LR
+	subgraph Frontend
+		A[Streamlit Dashboard]
+	end
+
+	subgraph Backend
+		B[FastAPI Gateway]
+		C[Telemetry Engine]
+		D[Strategy Simulator]
+		E[Tyre Model]
+	end
+
+	subgraph Data
+		F[(FastF1 Cache)]
+		G[(PostgreSQL)]
+	end
+
+	A --> B
+	B --> C
+	B --> D
+	B --> E
+	C --> F
+	B --> G
+```
+
 ## Features
 
-- Driver and constructor performance analysis
-- Race-by-race trend review
-- Comparison of results across seasons
-- Data visualization for F1 insights
+- Unified telemetry comparison with synchronized hover and team color mapping
+- Downsampled Plotly rendering for higher-frequency telemetry traces
+- Spatial track overlays with dominance shading and corner annotations
+- Tyre degradation prediction and pit strategy search
+- REST and WebSocket analytics endpoints
+
+## Environment Variables
+
+- `F1_DATA_MODE`: `LIVE` or `OFFLINE`
+- `FASTF1_CACHE_DIR`: cache directory for FastF1 downloads
+- `DATABASE_URL`: PostgreSQL connection string for backend services
 
 ## Getting Started
 
-1. Clone the repository.
-2. Install the project dependencies.
-3. From the `f1-perf-analytics/` folder, run the launcher script:
+1. Install the dependencies into the project virtual environment:
 
-	```powershell
-	.\run-dashboard.ps1
-	```
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
 
-	If you prefer to launch Streamlit directly, run:
+2. Start the dashboard with the launcher script:
 
-	```powershell
-	streamlit run frontend/dashboard.py
-	```
+   ```powershell
+   .\run-dashboard.ps1
+   ```
 
-	If you are in a different directory, use the absolute path:
+3. Or launch Streamlit directly:
 
-	```powershell
-	streamlit run c:\Users\ASUS\OneDrive\Documents\F1-Project\f1-perf-analytics\frontend\dashboard.py
-	```
+   ```powershell
+   streamlit run frontend/dashboard.py
+   ```
 
-4. To run the full stack with Docker, use:
+4. Start the full stack with Docker:
 
-	```powershell
-	docker compose up --build
-	```
+   ```powershell
+   docker compose up --build
+   ```
+
+## Quick Commands
+
+- Dashboard: `python -m streamlit run frontend/dashboard.py`
+- API: `uvicorn backend.app.main:app --reload`
+- Tests: `python -m pytest tests -q`
+
+## API Surface
+
+- `GET /health`
+- `POST /api/v1/telemetry/comparison`
+- `POST /api/v1/strategy/optimize`
+- `POST /api/v1/models/train`
+- `WS /ws/telemetry`
 
 ## Project Structure
 
-- `data/` - datasets used by the project
-- `src/` - application source code
-- `assets/` - images and static resources
-- `README.md` - project documentation
+- `backend/` - FastAPI gateway and request schemas
+- `frontend/` - Streamlit dashboard
+- `telemetry/` - ingestion, math, and spatial analysis
+- `models/` - tyre degradation inference
+- `database/` - schema and seed SQL
+- `tests/` - unit and API tests
 
 ## Usage
 
-Open the dashboard in your browser after Streamlit starts, then use the sidebar controls to inspect driver stats, team performance, and race trends.
-
-## Data
-
-The project is designed to work with Formula 1 race and season data such as results, standings, lap performance, and team metrics.
+Use the sidebar controls to switch drivers, select sessions, and tune strategy assumptions. Set `F1_DATA_MODE=OFFLINE` for deterministic demo data or `LIVE` to request FastF1-backed telemetry.
 
 ## Contributing
 
-Contributions are welcome. Keep changes focused and document any new data sources or analysis steps.
+Keep changes focused, update tests when touching analytics logic, and document new payloads or endpoints in this file.
 
