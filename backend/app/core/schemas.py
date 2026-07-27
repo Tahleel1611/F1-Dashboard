@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -35,11 +36,53 @@ class TelemetryChannelPacket(BaseModel):
     model_config = {"frozen": True}
 
 
+class TelemetryDerivedFrame(BaseModel):
+    distance_m: float = Field(..., ge=0.0)
+    speed_kph: float = Field(..., ge=0.0)
+    throttle_pct: float = Field(..., ge=0.0, le=100.0)
+    brake_active: int = Field(..., ge=0, le=1)
+    gear: int = Field(..., ge=1, le=8)
+    rpm: int = Field(..., ge=0, le=20000)
+    x_coord: float
+    y_coord: float
+    longitudinal_g: float
+    lateral_g: float
+    throttle_smoothness: float
+    braking_zone: int = Field(..., ge=0, le=1)
+
+
+class TelemetryStreamPacket(BaseModel):
+    timestamp: datetime
+    driver_one: TelemetryDerivedFrame
+    driver_two: TelemetryDerivedFrame
+    delta_time_s: float
+    session_name: str
+
+
 class StrategyOptimizationRequest(BaseModel):
     total_laps: int = Field(57, ge=10, le=80)
     initial_fuel: float = Field(100.0, ge=5.0, le=115.0)
     pit_loss_seconds: float = Field(23.0, ge=15.0, le=35.0)
     track_temp_c: float = Field(35.0, ge=10.0, le=55.0)
+    fuel_burn_kg_per_lap: float = Field(1.6, ge=0.5, le=3.0)
+    track_evolution_per_lap: float = Field(0.0, ge=-0.5, le=0.5)
+    compound_matrix: list[list[int]] = Field(
+        default_factory=lambda: [[0, 1], [0, 2], [1, 0], [1, 2], [2, 0], [2, 1], [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+    )
+    degradation_slopes: dict[str, float] = Field(default_factory=lambda: {"soft": 0.125, "medium": 0.065, "hard": 0.024})
+
+
+class ModelTrainingRequest(BaseModel):
+    training_mode: Literal["synthetic", "historical"] = "synthetic"
+    session_context: SessionContext | None = None
+
+
+class ModelTrainingResponse(BaseModel):
+    success: bool
+    training_mode: str
+    rmse: float | None = None
+    r2_score: float | None = None
+    records_used: int
 
 
 class TelemetryComparisonRequest(BaseModel):
@@ -56,6 +99,7 @@ class TelemetryComparisonResponse(BaseModel):
     aligned_points: int
     delta_end_s: float
     preview_rows: list[dict[str, object]]
+    driver_metadata: dict[str, object]
 
 
 class DashboardFilterState(BaseModel):
