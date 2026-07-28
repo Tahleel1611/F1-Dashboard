@@ -1,10 +1,10 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-WORKDIR /app
+WORKDIR /build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential gcc \
@@ -12,7 +12,23 @@ RUN apt-get update \
 
 COPY requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip wheel --wheel-dir=/wheels -r requirements.txt
+
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    FASTF1_CACHE_DIR=/tmp/fastf1_cache \
+    F1_DATA_MODE=LIVE
+
+WORKDIR /app
+
+COPY --from=builder /wheels /wheels
+COPY requirements.txt ./requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install --no-index --find-links=/wheels -r requirements.txt
 
 COPY . .
 
