@@ -13,6 +13,12 @@ from xgboost import XGBRegressor
 class F1TyrePredictor:
     feature_columns = ["tyre_age", "track_temp", "fuel_load", "compound_encoded"]
 
+    compound_curve_map = {
+        0: lambda age, temp: 0.14 * np.power(age, 1.22) * np.exp((temp - 35.0) / 32.0),
+        1: lambda age, temp: 0.068 * age * (0.92 + temp / 120.0),
+        2: lambda age, temp: 0.028 * np.power(age, 0.87) * np.power(temp / 35.0, 0.68),
+    }
+
     def __init__(self) -> None:
         self.model = XGBRegressor(
             objective="reg:squarederror",
@@ -35,9 +41,9 @@ class F1TyrePredictor:
         compound_encoded = rng.integers(0, 3, size=samples)
 
         base_time = 88.5 + (fuel_load * 0.034)
-        soft_curve = 0.125 * np.power(tyre_age, 1.25) * np.exp((track_temp - 35.0) / 30.0)
-        medium_curve = 0.065 * tyre_age * (track_temp / 35.0)
-        hard_curve = 0.024 * np.power(tyre_age, 0.86) * np.power(track_temp / 35.0, 0.7)
+        soft_curve = F1TyrePredictor.compound_curve_map[0](tyre_age, track_temp)
+        medium_curve = F1TyrePredictor.compound_curve_map[1](tyre_age, track_temp)
+        hard_curve = F1TyrePredictor.compound_curve_map[2](tyre_age, track_temp)
         degradation = np.select(
             [compound_encoded == 0, compound_encoded == 1, compound_encoded == 2],
             [soft_curve, medium_curve, hard_curve],
@@ -55,6 +61,9 @@ class F1TyrePredictor:
         )
 
     def train_model(self, df: pd.DataFrame) -> Tuple[float, float]:
+        if df.empty:
+            raise ValueError("Training data must not be empty")
+
         features = df[self.feature_columns]
         target = df["target_lap_time"]
         split_idx = max(int(len(df) * 0.8), 1)
@@ -77,6 +86,20 @@ class F1TyrePredictor:
             dataset = self.generate_synthetic_telemetry_dataset()
             self.train_model(dataset)
 
+    def retrain_from_historical_session(self, df: pd.DataFrame) -> Tuple[float, float]:
+        normalized = df.copy()
+        if "compound_code" in normalized.columns and "compound_encoded" not in normalized.columns:
+            normalized = normalized.rename(columns={"compound_code": "compound_encoded"})
+        if "target_lap_time" not in normalized.columns:
+            raise ValueError("Historical data must include target_lap_time")
+        rmse, r2 = self.train_model(normalized)
+        return rmse, r2
+
+    @staticmethod
+    def estimate_compound_degradation(compound: int, tyre_age: np.ndarray, track_temp: np.ndarray) -> np.ndarray:
+        curve = F1TyrePredictor.compound_curve_map.get(compound, F1TyrePredictor.compound_curve_map[1])
+        return np.asarray(curve(tyre_age, track_temp), dtype=float)
+
     def predict_stint_trajectory(
         self, start_lap: int, end_lap: int, track_temp: float, fuel_load: float, compound: int
     ) -> np.ndarray:
@@ -91,7 +114,9 @@ class F1TyrePredictor:
                 "compound_encoded": np.full_like(laps, compound, dtype=float),
             }
         )
-        return self.model.predict(stint_features[self.feature_columns])
+        baseline_prediction = self.model.predict(stint_features[self.feature_columns])
+        compound_adjustment = self.estimate_compound_degradation(compound, laps, np.full_like(laps, track_temp, dtype=float))
+        return baseline_prediction + 0.12 * compound_adjustment
 
 
 if __name__ == "__main__":
