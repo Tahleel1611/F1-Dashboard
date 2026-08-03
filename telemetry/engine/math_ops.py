@@ -10,6 +10,25 @@ def _as_float_array(values: np.ndarray | pd.Series | list[float]) -> np.ndarray:
     return np.asarray(values, dtype=float)
 
 
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray, default_value: float = 0.0) -> np.ndarray:
+    safe_denominator = np.where(np.abs(denominator) < 1e-9, np.nan, denominator)
+    result = np.divide(numerator, safe_denominator)
+    return np.nan_to_num(result, nan=default_value, posinf=default_value, neginf=default_value)
+
+
+def _infer_elapsed_seconds(distance_meters: np.ndarray, speed_kph: np.ndarray) -> np.ndarray:
+    distance = _as_float_array(distance_meters)
+    speed_ms = np.clip(_as_float_array(speed_kph) / 3.6, 0.5, None)
+
+    if distance.size < 2:
+        return np.zeros_like(distance)
+
+    dx = np.diff(distance, prepend=distance[0])
+    dx = np.where(dx < 0.0, 0.0, dx)
+    dt = _safe_divide(dx, speed_ms, default_value=0.0)
+    return np.cumsum(dt)
+
+
 def calculate_acceleration(speed_kph: np.ndarray | pd.Series | list[float], time_seconds: np.ndarray | pd.Series | list[float]) -> np.ndarray:
     speed_ms = _as_float_array(speed_kph) / 3.6
     time_seconds_array = _as_float_array(time_seconds)
@@ -20,8 +39,58 @@ def calculate_acceleration(speed_kph: np.ndarray | pd.Series | list[float], time
     dt = np.diff(time_seconds_array, prepend=time_seconds_array[0])
     dt = np.where(np.abs(dt) < 1e-6, 1e-3, dt)
     dv = np.diff(speed_ms, prepend=speed_ms[0])
-    acceleration_ms2 = dv / dt
+    acceleration_ms2 = _safe_divide(dv, dt)
     return np.round(acceleration_ms2 / 9.81, 3)
+
+
+def calculate_longitudinal_g_force(
+    speed_kph: np.ndarray | pd.Series | list[float],
+    distance_meters: np.ndarray | pd.Series | list[float],
+) -> np.ndarray:
+    speed_array = _as_float_array(speed_kph)
+    elapsed_seconds = _infer_elapsed_seconds(distance_meters, speed_array)
+    return calculate_acceleration(speed_array, elapsed_seconds)
+
+
+def calculate_throttle_derivative(
+    throttle_pct: np.ndarray | pd.Series | list[float],
+    distance_meters: np.ndarray | pd.Series | list[float],
+    speed_kph: np.ndarray | pd.Series | list[float],
+) -> np.ndarray:
+    throttle_array = _as_float_array(throttle_pct)
+    elapsed_seconds = _infer_elapsed_seconds(distance_meters, _as_float_array(speed_kph))
+
+    if throttle_array.size < 2:
+        return np.zeros_like(throttle_array)
+
+    dt = np.diff(elapsed_seconds, prepend=elapsed_seconds[0])
+    dt = np.where(np.abs(dt) < 1e-6, 1e-3, dt)
+    dthrottle = np.diff(throttle_array, prepend=throttle_array[0])
+    return np.round(_safe_divide(dthrottle, dt), 3)
+
+
+def calculate_lateral_g_force(
+    x_coords: np.ndarray | pd.Series | list[float],
+    y_coords: np.ndarray | pd.Series | list[float],
+    speed_kph: np.ndarray | pd.Series | list[float],
+) -> np.ndarray:
+    x = _as_float_array(x_coords)
+    y = _as_float_array(y_coords)
+    speed_ms = _as_float_array(speed_kph) / 3.6
+
+    if x.size < 3 or y.size < 3:
+        return np.zeros_like(speed_ms)
+
+    dx = np.gradient(x)
+    dy = np.gradient(y)
+    ddx = np.gradient(dx)
+    ddy = np.gradient(dy)
+
+    curvature_numerator = np.abs(dx * ddy - dy * ddx)
+    curvature_denominator = np.power(dx * dx + dy * dy, 1.5)
+    curvature = _safe_divide(curvature_numerator, curvature_denominator)
+    lateral_acceleration_ms2 = np.power(speed_ms, 2) * curvature
+    return np.round(lateral_acceleration_ms2 / 9.81, 3)
 
 
 def compute_delta_time(
@@ -81,6 +150,9 @@ def isolate_braking_zones(brake_channel: np.ndarray | pd.Series | list[float], g
 
 class F1TelemetryEngine:
     calculate_acceleration = staticmethod(calculate_acceleration)
+    calculate_longitudinal_g_force = staticmethod(calculate_longitudinal_g_force)
+    calculate_lateral_g_force = staticmethod(calculate_lateral_g_force)
+    calculate_throttle_derivative = staticmethod(calculate_throttle_derivative)
     compute_delta_time = staticmethod(compute_delta_time)
     isolate_braking_zones = staticmethod(isolate_braking_zones)
 
@@ -96,7 +168,9 @@ if __name__ == "__main__":
     df_mock = pd.DataFrame({"Distance": mock_distance, "d1_Speed": mock_v1, "d2_Speed": mock_v2})
     delta_profile = compute_delta_time(df_mock)
     brake_zones = isolate_braking_zones(mock_brake, g_traces)
+    longitudinal_g = calculate_longitudinal_g_force(mock_v1, mock_distance)
 
     print(g_traces)
     print(delta_profile.head())
     print(brake_zones)
+    print(longitudinal_g)
