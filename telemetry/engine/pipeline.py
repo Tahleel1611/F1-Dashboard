@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -13,11 +14,18 @@ try:
 except Exception:  # pragma: no cover
     ff1 = None
 
+from telemetry.engine.config import get_runtime_config
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 class F1DualIngestionEngine:
-    def __init__(self, cache_dir: str = ".fastf1_cache"):
-        self.cache_dir = Path(cache_dir)
+    def __init__(self, cache_dir: str | None = None, data_mode: str | None = None):
+        runtime_config = get_runtime_config()
+        self.cache_dir = Path(cache_dir or runtime_config.fastf1_cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.data_mode = (data_mode or runtime_config.data_mode).upper()
         if ff1 is not None:
             ff1.Cache.enable_cache(str(self.cache_dir))
 
@@ -95,51 +103,66 @@ class F1DualIngestionEngine:
 
         return synchronized
 
+    def _fetch_live_dataset(self, year: int, round_id: int | str, session_code: str, d1: str, d2: str) -> tuple[pd.DataFrame, Dict[str, Any]]:
+        if ff1 is None:
+            raise RuntimeError("FastF1 unavailable")
+
+        session = ff1.get_session(year, round_id, session_code)
+        session.load(telemetry=True, laps=True, weather=False)
+
+        selected_laps = session.laps.pick_drivers([d1, d2])
+        lap_d1 = selected_laps[selected_laps["Driver"] == d1].pick_fastest()
+        lap_d2 = selected_laps[selected_laps["Driver"] == d2].pick_fastest()
+
+        telemetry_d1 = self._standardize_telemetry(lap_d1.get_telemetry())
+        telemetry_d2 = self._standardize_telemetry(lap_d2.get_telemetry())
+        aligned_telemetry = self._align_frames(telemetry_d1, telemetry_d2)
+
+        metadata = {
+            "session_name": f"{year} {session.event['EventName']} - {session_code}",
+            "d1_metadata": {
+                "driver": d1,
+                "team": lap_d1["Team"],
+                "lap_time": str(lap_d1["LapTime"]).split()[-1][:9],
+                "compound": lap_d1["Compound"],
+                "life": int(lap_d1["TyreLife"]),
+            },
+            "d2_metadata": {
+                "driver": d2,
+                "team": lap_d2["Team"],
+                "lap_time": str(lap_d2["LapTime"]).split()[-1][:9],
+                "compound": lap_d2["Compound"],
+                "life": int(lap_d2["TyreLife"]),
+            },
+        }
+        return aligned_telemetry, metadata
+
+    def _fetch_offline_dataset(self, year: int, session_code: str, d1: str, d2: str) -> tuple[pd.DataFrame, Dict[str, Any]]:
+        driver_one = self._build_synthetic_lap(d1, bias=0.0)
+        driver_two = self._build_synthetic_lap(d2, bias=24.0)
+        aligned_telemetry = self._align_frames(driver_one, driver_two)
+        metadata = {
+            "session_name": f"{year} Synthetic Session - {session_code}",
+            "d1_metadata": {"driver": d1, "team": "SYN", "lap_time": "1:28.000", "compound": "SOFT", "life": 3},
+            "d2_metadata": {"driver": d2, "team": "SYN", "lap_time": "1:28.600", "compound": "MEDIUM", "life": 4},
+        }
+        return aligned_telemetry, metadata
+
     def fetch_comparison_dataset(
         self, year: int, round_id: int | str, session_code: str, d1: str, d2: str
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         try:
-            if ff1 is None:
-                raise RuntimeError("FastF1 unavailable")
+            if self.data_mode == "OFFLINE":
+                return self._fetch_offline_dataset(year, session_code, d1, d2)
 
-            session = ff1.get_session(year, round_id, session_code)
-            session.load(telemetry=True, laps=True, weather=False)
-
-            lap_d1 = session.laps.pick_driver(d1).pick_fastest()
-            lap_d2 = session.laps.pick_driver(d2).pick_fastest()
-
-            telemetry_d1 = self._standardize_telemetry(lap_d1.get_telemetry())
-            telemetry_d2 = self._standardize_telemetry(lap_d2.get_telemetry())
-            aligned_telemetry = self._align_frames(telemetry_d1, telemetry_d2)
-
-            metadata = {
-                "session_name": f"{year} {session.event['EventName']} - {session_code}",
-                "d1_metadata": {
-                    "driver": d1,
-                    "team": lap_d1["Team"],
-                    "lap_time": str(lap_d1["LapTime"]).split()[-1][:9],
-                    "compound": lap_d1["Compound"],
-                    "life": int(lap_d1["TyreLife"]),
-                },
-                "d2_metadata": {
-                    "driver": d2,
-                    "team": lap_d2["Team"],
-                    "lap_time": str(lap_d2["LapTime"]).split()[-1][:9],
-                    "compound": lap_d2["Compound"],
-                    "life": int(lap_d2["TyreLife"]),
-                },
-            }
-            return aligned_telemetry, metadata
+            return self._fetch_live_dataset(year, round_id, session_code, d1, d2)
         except Exception:
-            driver_one = self._build_synthetic_lap(d1, bias=0.0)
-            driver_two = self._build_synthetic_lap(d2, bias=24.0)
-            aligned_telemetry = self._align_frames(driver_one, driver_two)
-            metadata = {
-                "session_name": f"{year} Synthetic Session - {session_code}",
-                "d1_metadata": {"driver": d1, "team": "SYN", "lap_time": "1:28.000", "compound": "SOFT", "life": 3},
-                "d2_metadata": {"driver": d2, "team": "SYN", "lap_time": "1:28.600", "compound": "MEDIUM", "life": 4},
-            }
-            return aligned_telemetry, metadata
+            LOGGER.warning("Falling back to synthetic telemetry for %s/%s/%s", year, round_id, session_code, exc_info=True)
+            return self._fetch_offline_dataset(year, session_code, d1, d2)
+
+
+def get_telemetry_broker(cache_dir: str | None = None, data_mode: str | None = None) -> F1DualIngestionEngine:
+    return F1DualIngestionEngine(cache_dir=cache_dir, data_mode=data_mode)
 
 
 if __name__ == "__main__":
