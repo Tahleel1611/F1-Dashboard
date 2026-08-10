@@ -176,6 +176,81 @@ def _fetch_remote_strategy_data(api_base_url: str, total_laps: int, initial_fuel
     return response.json()
 
 
+def _build_live_stream_packets(frame: pd.DataFrame, max_packets: int = 8, driver_one: str = "VER", driver_two: str = "LEC") -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+
+    count = max(1, min(int(max_packets), len(frame)))
+    step = max(1, len(frame) // count)
+    packets: list[dict[str, object]] = []
+
+    for index in range(0, len(frame), step):
+        if len(packets) >= count:
+            break
+
+        row = frame.iloc[index]
+        packets.append(
+            {
+                "timestamp": pd.Timestamp.utcnow().isoformat(),
+                "session_name": "LIVE-FALLBACK",
+                "driver_one": {
+                    "driver_code": driver_one,
+                    "distance_m": float(row["Distance"]),
+                    "speed_kph": float(row["d1_Speed"]),
+                    "throttle_pct": float(row["d1_Throttle"]),
+                    "brake_active": int(row["d1_Brake"]),
+                    "gear": int(row["d1_Gear"]),
+                    "rpm": int(row["d1_RPM"]),
+                    "x_coord": float(row["d1_X"]),
+                    "y_coord": float(row["d1_Y"]),
+                    "mguk_output_kw": 0.0,
+                    "derating_active": False,
+                    "aero_mode": "X",
+                },
+                "driver_two": {
+                    "driver_code": driver_two,
+                    "distance_m": float(row["Distance"]),
+                    "speed_kph": float(row["d2_Speed"]),
+                    "throttle_pct": float(row["d2_Throttle"]),
+                    "brake_active": int(row["d2_Brake"]),
+                    "gear": int(row["d2_Gear"]),
+                    "rpm": int(row["d2_RPM"]),
+                    "x_coord": float(row["d2_X"]),
+                    "y_coord": float(row["d2_Y"]),
+                    "mguk_output_kw": 0.0,
+                    "derating_active": False,
+                    "aero_mode": "Z",
+                },
+                "delta_time_s": 0.0,
+                "regulation_context": "2026-Hybrid",
+            }
+        )
+
+    return packets
+
+
+def _build_live_stream_figure(packets: list[dict[str, object]], driver_one: str = "VER", driver_two: str = "LEC") -> go.Figure:
+    distances = [float(packet["driver_one"]["distance_m"]) for packet in packets]
+    d1_speeds = [float(packet["driver_one"]["speed_kph"]) for packet in packets]
+    d2_speeds = [float(packet["driver_two"]["speed_kph"]) for packet in packets]
+
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(x=distances, y=d1_speeds, mode="lines+markers", name=f"{driver_one} Speed", line=dict(color="#66FCF1", width=2.2)))
+    figure.add_trace(go.Scatter(x=distances, y=d2_speeds, mode="lines+markers", name=f"{driver_two} Speed", line=dict(color="#F10808", width=2.0)))
+    figure.update_layout(
+        height=220,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="#0B0C10",
+        plot_bgcolor="#0B0C10",
+        font=dict(color="#FFFFFF", family="JetBrains Mono, Consolas, monospace"),
+        legend=dict(orientation="h", y=1.08, x=0.02),
+        hovermode="x unified",
+    )
+    figure.update_yaxes(title_text="Speed (km/h)", gridcolor="#26313f", zeroline=False)
+    figure.update_xaxes(title_text="Distance (m)", gridcolor="#26313f", zeroline=False)
+    return figure
+
+
 def _packet_to_frame(packet: dict[str, object]) -> pd.DataFrame:
     driver_one = packet["driver_one"]
     driver_two = packet["driver_two"]
@@ -402,6 +477,11 @@ def main() -> None:
                 st.sidebar.json(packet.iloc[0].to_dict())
         except Exception as error:
             st.warning(f"WebSocket snapshot failed, using local engine fallback: {error}")
+            fallback_packets = _build_live_stream_packets(df, max_packets=3, driver_one=driver_one, driver_two=driver_two)
+            if fallback_packets:
+                st.sidebar.info("Live fallback packets generated from local telemetry sample")
+                st.sidebar.json(fallback_packets[0])
+                st.sidebar.plotly_chart(_build_live_stream_figure(fallback_packets, driver_one=driver_one, driver_two=driver_two), use_container_width=True, config={"displayModeBar": False})
 
     delta_profile = F1TelemetryEngine.compute_delta_time(df)
     physics_df = _enrich_physics_columns(df)
