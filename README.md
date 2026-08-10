@@ -12,7 +12,7 @@ Formula 1 performance analytics workspace for telemetry comparison, spatial trac
 
 ## Overview
 
-The dashboard uses FastF1 when available, falls back to deterministic synthetic telemetry when offline, and exposes the same analytics through a FastAPI gateway. The current UI emphasizes synchronized telemetry inspection, derived physics metrics, and vector track overlays.
+The dashboard uses FastF1 when available, falls back to deterministic synthetic telemetry when offline, and exposes the same analytics through a FastAPI gateway. The current UI emphasizes synchronized telemetry inspection, derived physics metrics, vector track overlays, live WebSocket telemetry, and 2026 regulation-aware derived channels.
 
 ## Architecture
 
@@ -46,8 +46,10 @@ flowchart LR
 
 - Unified telemetry comparison with synchronized hover and team color mapping
 - Downsampled Plotly rendering for higher-frequency telemetry traces
+- Live WebSocket telemetry streaming with synthetic fallback packets
+- 2026 hybrid-era telemetry metrics including MGU-K output, SoC, derating, and active aero state parsing
 - Spatial track overlays with dominance shading and corner annotations
-- Tyre degradation prediction and pit strategy search
+- Tyre degradation prediction and Monte Carlo pit strategy search
 - REST and WebSocket analytics endpoints
 
 ## Environment Variables
@@ -96,6 +98,19 @@ flowchart LR
 - `POST /api/v1/models/train`
 - `WS /ws/telemetry`
 
+### Telemetry Stream Schema
+
+`TelemetryStreamPacket`
+
+- `timestamp`: UTC timestamp for the sampled packet
+- `session_name`: session label returned by the backend
+- `regulation_context`: regulation tag for the packet stream, currently `2026-Hybrid`
+- `driver_one` and `driver_two`: derived telemetry frames containing distance, speed, throttle, brake, gear, RPM, spatial coordinates, g-forces, MGU-K output, battery SoC, derating state, active aero mode, boost/overtake mode, and deployed electric energy
+
+### Strategy Response Shape
+
+`/api/v1/strategy/optimize` returns the legacy `best_strategy` and `optimal_strategy` keys, and the Monte Carlo engine also computes confidence intervals and pit-window overlap data internally for the dashboard overlay.
+
 ## Project Structure
 
 - `backend/` - FastAPI gateway and request schemas
@@ -108,6 +123,8 @@ flowchart LR
 ## Usage
 
 Use the sidebar controls to switch drivers, select sessions, and tune strategy assumptions. Set `F1_DATA_MODE=OFFLINE` for deterministic demo data or `LIVE` to request FastF1-backed telemetry.
+
+The live canvas first tries `ws://localhost:8000/ws/telemetry` and falls back to synthetic packets if the backend stream is unavailable.
 
 ## Contributing
 
