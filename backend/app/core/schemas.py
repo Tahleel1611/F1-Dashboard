@@ -45,10 +45,19 @@ class TelemetryDerivedFrame(BaseModel):
     rpm: int = Field(..., ge=0, le=20000)
     x_coord: float
     y_coord: float
+    z_coord: float = 0.0
     longitudinal_g: float
     lateral_g: float
     throttle_smoothness: float
     braking_zone: int = Field(..., ge=0, le=1)
+    mguk_output_kw: float = Field(..., ge=0.0, le=350.0)
+    battery_soc_pct: float = Field(..., ge=0.0, le=100.0)
+    derating_active: int = Field(..., ge=0, le=1)
+    aero_mode: Literal["X", "Z"] = "Z"
+    aero_switch: int = Field(..., ge=0, le=1)
+    boost_mode_active: int = Field(..., ge=0, le=1)
+    overtake_mode_active: int = Field(..., ge=0, le=1)
+    electric_energy_kwh: float = Field(..., ge=0.0)
 
 
 class TelemetryStreamPacket(BaseModel):
@@ -57,6 +66,7 @@ class TelemetryStreamPacket(BaseModel):
     driver_two: TelemetryDerivedFrame
     delta_time_s: float
     session_name: str
+    regulation_context: str = "2026-Hybrid"
 
 
 class StrategyOptimizationRequest(BaseModel):
