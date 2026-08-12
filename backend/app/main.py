@@ -122,10 +122,19 @@ def _frame_to_packet(frame_row, partner_row, session_name: str, distance_index: 
         rpm=int(frame_row["d1_RPM"]),
         x_coord=float(frame_row["d1_X"]),
         y_coord=float(frame_row["d1_Y"]),
+        z_coord=float(frame_row.get("d1_Z", 0.0)),
         longitudinal_g=float(F1TelemetryEngine.calculate_longitudinal_g_force([frame_row["d1_Speed"]], [frame_row["Distance"]])[0]),
         lateral_g=float(F1TelemetryEngine.calculate_lateral_g_force([frame_row["d1_X"]], [frame_row["d1_Y"]], [frame_row["d1_Speed"]])[0]),
         throttle_smoothness=float(F1TelemetryEngine.calculate_throttle_derivative([frame_row["d1_Throttle"]], [frame_row["Distance"]], [frame_row["d1_Speed"]])[0]),
         braking_zone=int(frame_row["d1_Brake"] > 0),
+        mguk_output_kw=float(frame_row.get("d1_MGUK_Output_kW", 0.0)),
+        battery_soc_pct=float(frame_row.get("d1_Battery_SoC_pct", 100.0)),
+        derating_active=int(frame_row.get("d1_Derating_Active", 0)),
+        aero_mode=str(frame_row.get("d1_Aero_Mode", "Z")),
+        aero_switch=int(frame_row.get("d1_Aero_Switch", 0)),
+        boost_mode_active=int(frame_row.get("d1_Boost_Mode_Active", 0)),
+        overtake_mode_active=int(frame_row.get("d1_Overtake_Mode_Active", 0)),
+        electric_energy_kwh=float(frame_row.get("d1_Electric_Energy_kWh", 0.0)),
     )
     driver_two_frame = TelemetryDerivedFrame(
         distance_m=float(partner_row["Distance"]),
@@ -136,10 +145,19 @@ def _frame_to_packet(frame_row, partner_row, session_name: str, distance_index: 
         rpm=int(partner_row["d2_RPM"]),
         x_coord=float(partner_row["d2_X"]),
         y_coord=float(partner_row["d2_Y"]),
+        z_coord=float(partner_row.get("d2_Z", 0.0)),
         longitudinal_g=float(F1TelemetryEngine.calculate_longitudinal_g_force([partner_row["d2_Speed"]], [partner_row["Distance"]])[0]),
         lateral_g=float(F1TelemetryEngine.calculate_lateral_g_force([partner_row["d2_X"]], [partner_row["d2_Y"]], [partner_row["d2_Speed"]])[0]),
         throttle_smoothness=float(F1TelemetryEngine.calculate_throttle_derivative([partner_row["d2_Throttle"]], [partner_row["Distance"]], [partner_row["d2_Speed"]])[0]),
         braking_zone=int(partner_row["d2_Brake"] > 0),
+        mguk_output_kw=float(partner_row.get("d2_MGUK_Output_kW", 0.0)),
+        battery_soc_pct=float(partner_row.get("d2_Battery_SoC_pct", 100.0)),
+        derating_active=int(partner_row.get("d2_Derating_Active", 0)),
+        aero_mode=str(partner_row.get("d2_Aero_Mode", "X")),
+        aero_switch=int(partner_row.get("d2_Aero_Switch", 0)),
+        boost_mode_active=int(partner_row.get("d2_Boost_Mode_Active", 0)),
+        overtake_mode_active=int(partner_row.get("d2_Overtake_Mode_Active", 0)),
+        electric_energy_kwh=float(partner_row.get("d2_Electric_Energy_kWh", 0.0)),
     )
     return TelemetryStreamPacket(
         timestamp=datetime.now(tz=timezone.utc),
@@ -147,6 +165,7 @@ def _frame_to_packet(frame_row, partner_row, session_name: str, distance_index: 
         driver_two=driver_two_frame,
         delta_time_s=float(delta_time_s),
         session_name=session_name,
+        regulation_context="2026-Hybrid",
     )
 
 
@@ -163,6 +182,26 @@ async def websocket_telemetry_stream(websocket: WebSocket) -> None:
         sample_size = max(1, min(int(query_params.get("sample_size", 120)), 240))
 
         aligned_telemetry, metadata = telemetry_engine.fetch_comparison_dataset(year, round_id, session_code, driver_one, driver_two)
+        aligned_telemetry = F1TelemetryEngine.calculate_2026_regulation_channels(
+            aligned_telemetry,
+            prefix="d1_",
+            distance_column="Distance",
+            speed_column="d1_Speed",
+            throttle_column="d1_Throttle",
+            brake_column="d1_Brake",
+            x_column="d1_X",
+            y_column="d1_Y",
+        )
+        aligned_telemetry = F1TelemetryEngine.calculate_2026_regulation_channels(
+            aligned_telemetry,
+            prefix="d2_",
+            distance_column="Distance",
+            speed_column="d2_Speed",
+            throttle_column="d2_Throttle",
+            brake_column="d2_Brake",
+            x_column="d2_X",
+            y_column="d2_Y",
+        )
         delta_profile = F1TelemetryEngine.compute_delta_time(aligned_telemetry)
         sample_step = max(len(aligned_telemetry) // sample_size, 1)
 
